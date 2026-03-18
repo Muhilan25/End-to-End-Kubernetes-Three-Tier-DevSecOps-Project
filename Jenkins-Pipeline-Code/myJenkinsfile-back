@@ -1,0 +1,108 @@
+pipeline {
+    agent any 
+    tools {
+        jdk 'jdk17'
+        nodejs 'node18'
+    }
+    environment {
+        GITHUB_URL = "https://github.com/Muhilan25/End-to-End-Kubernetes-Three-Tier-DevSecOps-Project.git"
+        SCANNER_HOME=tool 'sonar-scanner'
+        ECR_REPO = "072583797351.dkr.ecr.ap-south-1.amazonaws.com/backend"
+        IMAGE_TAG = 'v${BUILD_NUMBER}'
+        AWS_REGION = 'ap-south-1'
+        GIRHUB_REPO = "End-to-End-Kubernetes-Three-Tier-DevSecOps-Project"
+        GITHUB_USERNAME = "Muhilan25"
+    }
+    stages {
+        stage("checkout") {
+            steps {
+                git branch: 'main', url: "${GITHUB_URL}"
+            }
+        }
+
+        stage("sonarqube") {
+            steps {
+                dir('Application-Code/backend') {
+                        withSonarQubeEnv('sonar') {
+                            sh ''' $SCANNER_HOME/bin/sonar-scanner \
+                                -Dsonar.projectName=three-tier-backend \
+                                -Dsonar.projectKey=three-tier-backend '''
+                    }
+                }
+            }
+        }
+
+        stage("quality check") {
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-cred'
+                }
+            }
+        }
+
+        stage("trivy file scan") {
+            steps {
+                dir("Application-Code/backend") {
+                    sh 'trivy fs --format table -o trivy-backend.html .'
+                }
+            }
+        }
+
+        stage("docker image") {
+            steps {
+                dir("Application-Code/backend") {
+                    sh 'pwd'
+                    sh 'ls -a'
+                    sh "docker build -t ${ECR_REPO}:${IMAGE_TAG} ."
+                }
+            }
+        }
+
+        stage('Login to ECR') {
+            steps {
+                script {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
+                                    credentialsId: 'aws-cred']]) {
+
+                        sh """
+                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}
+                        docker push ${ECR_REPO}:${IMAGE_TAG}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage("trivy image scan") {
+            steps {
+                sh "trivy image --format table -o trivy-backend-image.html ${ECR_REPO}:${IMAGE_TAG} "
+            }
+        }
+
+        stage("git checkout") {
+            steps {
+                git branch: 'main', url: "${GITHUB_URL}"
+            }
+        }
+
+        stage("update backend deploymnet file") {
+            steps {
+                dir("Kubernetes-Manifests-file/Backend") {
+                    withCredentials([usernamePassword(credentialsId: 'git-cred', passwordVariable: 'GIT_PASS', usernameVariable: 'GIT_USER')]) {
+                        sh """
+                        #update image tag
+                            sed -i "s|image: .*backend:.*|image: ${ECR_REPO}:${IMAGE_TAG}|g" deployment.yaml
+                            echo "Updated file:"
+                            cat deployment.yaml
+                            git config user.email "abc@gmail.com"
+                            git config user.name "admin"
+                            git add deployment.yaml
+                            git commit -m "update imagetag ${IMAGE_TAG}"
+                            git push https://${GIT_USER}:${GIT_PASS}@github.com/Muhilan25/End-to-End-Kubernetes-Three-Tier-DevSecOps-Project.git HEAD:main
+                        """
+                    }
+                }
+            }
+        }
+    }
+}
