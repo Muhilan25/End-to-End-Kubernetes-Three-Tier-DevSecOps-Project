@@ -28,7 +28,7 @@ spec:
         image: 072583797351.dkr.ecr.ap-south-1.amazonaws.com/frontend:v19
         imagePullPolicy: Always
         ports:
-        - Port: 80
-          targetPort: 80
+        - containerPort: 80
+          
 
 
