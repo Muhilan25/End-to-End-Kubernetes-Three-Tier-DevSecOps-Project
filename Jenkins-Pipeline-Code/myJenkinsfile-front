@@ -1,0 +1,115 @@
+pipeline {
+    agent any
+    tools {
+        jdk 'jdk17'
+        nodejs 'node18'
+    }
+    environment {
+        GITHUB_URL = "https://github.com/Muhilan25/End-to-End-Kubernetes-Three-Tier-DevSecOps-Project.git"
+        SCANNER_HOME=tool 'sonar-scanner'
+        ECR_REPO = "072583797351.dkr.ecr.ap-south-1.amazonaws.com/frontend"
+        IMAGE_TAG = 'v${BUILD_NUMBER}'
+        AWS_REGION = 'ap-south-1'
+        GIRHUB_REPO = "End-to-End-Kubernetes-Three-Tier-DevSecOps-Project"
+        GITHUB_USERNAME = "Muhilan25"
+    }
+    stages {
+        stage("checkout") {
+            steps {
+                git branch: 'main', url: "${GITHUB_URL}"
+            }
+        }
+
+        stage("sonarqube") {
+            steps {
+                dir('Application-Code/frontend') {
+                        withSonarQubeEnv('sonar') {
+                            sh ''' $SCANNER_HOME/bin/sonar-scanner \
+                                -Dsonar.projectName=three-tier-frontend \
+                                -Dsonar.projectKey=three-tier-frontend '''
+                    }
+                }
+            }
+        }
+
+        stage("code quality gate") {
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-cred'
+                }
+            }
+        }
+
+        stage("trivy file scan") {
+            steps {
+                dir('Application-Code/frontend') {
+                    sh 'trivy fs --format table -o trivy-file.html .'
+                }          
+            }
+        }
+
+        stage("docker-image") {
+            steps {
+                script {
+                    dir("Application-Code/frontend") {
+                        sh 'pwd'
+                        sh 'ls -a'
+                        sh "docker build -t ${ECR_REPO}:${IMAGE_TAG} ."
+                    }
+                }
+            }
+        }
+
+        stage('Login to ECR') {
+            steps {
+                script {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
+                                    credentialsId: 'aws-cred']]) {
+
+                        sh """
+                        aws ecr get-login-password --region ${AWS_REGION} \
+                        | docker login --username AWS --password-stdin ${ECR_REPO} 
+                        docker push ${ECR_REPO}:${IMAGE_TAG}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage("trivy image scan") {
+            steps {
+                dir("Application-Code/frontend") {
+                    sh "trivy image --format table -o trivy-image.html ${ECR_REPO}:${IMAGE_TAG}"
+                }
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main', url: "${GITHUB_URL}"
+            }
+        }
+
+        stage("update deployment file") {
+            steps {
+                dir("Kubernetes-Manifests-file/Frontend") {
+                    withCredentials([usernamePassword(credentialsId: 'git-cred', passwordVariable: 'GIT_PASS', usernameVariable: 'GIT_USER')]) {
+                        sh """
+                        #update image tag in Kubernetes-Manifests-file/Frontend deployment file
+                            
+                            sed -i "s|image: .*frontend:.*|image: ${ECR_REPO}:${IMAGE_TAG}|g" deployment.yaml
+                            echo "Updated file:"
+                            cat deployment.yaml
+                            git config user.email "abc@gmail.com"
+                            git config user.name "admin"
+                            git add deployment.yaml
+                            git commit -m "update imagetag ${IMAGE_TAG}"
+                            git push https://${GIT_USER}:${GIT_PASS}@github.com/Muhilan25/End-to-End-Kubernetes-Three-Tier-DevSecOps-Project.git HEAD:main
+                            
+                        """
+                    }
+                }
+            }
+        }
+    }
+}
