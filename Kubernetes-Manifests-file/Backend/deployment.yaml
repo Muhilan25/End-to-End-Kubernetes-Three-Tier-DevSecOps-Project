@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api
+  name: backend
   namespace: three-tier
   labels:
-    role: api
+    role: backend
     env: demo
 spec:
   replicas: 2
@@ -15,17 +15,17 @@ spec:
       maxUnavailable: 25%
   selector:
     matchLabels:
-      role: api
+      role: backend
   template:
     metadata:
       labels:
-        role: api
+        role: backend
     spec:
       imagePullSecrets:
       - name: ecr-registry-secret
       containers:
-      - name: api
-        image: 072583797351.dkr.ecr.ap-south-1.amazonaws.com/backend:v6
+      - name: backend
+        image: 407622020962.dkr.ecr.us-east-1.amazonaws.com/backend:1
         imagePullPolicy: Always
         env:
           - name: MONGO_CONN_STR
